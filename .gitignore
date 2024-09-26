@@ -1,4 +1,6 @@
 images
 old_images
+old_code
 results
 .idea
+__pycache__
