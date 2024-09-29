@@ -27,11 +27,10 @@ def save_extracted_image(image, coin_nr, side, filename, folder):
     cv2.imwrite(extracted_path, image)
     return extracted_path
 
-def draw_rows_debug_image(image, num_segments, selected_segments, filename, output_dir):
+def draw_rows_debug_image(image, num_segments, segment_height, selected_segments, filename, output_dir):
     img_copy = image.copy()
     overlay = img_copy.copy()
     image_height, image_width = img_copy.shape[:2]
-    segment_height = image_height / num_segments
 
     for seg_idx in range(num_segments):
         y_start = int(seg_idx * segment_height)
@@ -50,6 +49,18 @@ def draw_rows_debug_image(image, num_segments, selected_segments, filename, outp
 
     # Speichere das Debug-Bild
     debug_path = save_debug_image(img_copy, 'rows', filename, output_dir)
+
+
+def save_extraction_overview_image(image, rectangles, filename, folder):
+    overview_img = image.copy()
+
+    for (x, y, w, h, area) in rectangles:
+        cv2.rectangle(overview_img, (x, y), (x + w, y + h), (0, 0, 255), 2)  # Red for extracted coins
+
+    # Save the overview image in the main folder
+    overview_path = os.path.join(folder, f"{os.path.splitext(filename)[0]}_extracted.png")
+    cv2.imwrite(overview_path, overview_img)
+    return overview_path
 
 
 # Function to check if a rectangle is inside another
@@ -130,8 +141,8 @@ def assign_to_rows(rectangles, image, filename, output_dir):
 
     print(f"[{filename}] Assigning rectangles to rows.")
 
-    num_segments = 40
-    segment_height = image.shape[0] / num_segments
+    num_segments = 100
+    segment_height = max(image.shape[0] / num_segments, 1.)
 
     # For each segment, find rectangles that overlap with the segment
     segments = [[] for _ in range(num_segments)]
@@ -224,7 +235,7 @@ def assign_to_rows(rectangles, image, filename, output_dir):
     relevant_sequences.sort(key=lambda seq: seq[0][0][1])
 
     print(f"[{filename}] Found {len(relevant_sequences)} rows.")
-    draw_rows_debug_image(image, num_segments, relevant_segments, filename, output_dir)
+    draw_rows_debug_image(image, num_segments, segment_height, relevant_segments, filename, output_dir)
 
     return relevant_sequences, relevant_segments
 
@@ -250,6 +261,8 @@ def detect_coins():
     detections = {}
     layouts = {}
     total_coins = 0
+
+    all_extracted_rectangles = defaultdict(list)
 
     # First pass: Detect coins in all images and store their rectangles
     for pair_key, pair in tqdm(pairs.items(), desc="Processing image pairs"):
@@ -391,6 +404,18 @@ def detect_coins():
                     'back_rect': {'x': x_b, 'y': y_b, 'w': w_b, 'h': h_b},
                 })
                 idx += 1
+
+                # Collect extracted rectangles for the overview image
+                all_extracted_rectangles[front_filename].append((x_f, y_f, w_f, h_f, _))
+                all_extracted_rectangles[back_filename].append((x_b, y_b, w_b, h_b, _))
+
+    for filename, rects in all_extracted_rectangles.items():
+        image_path = os.path.join(image_dir, filename)
+        img = cv2.imread(image_path)
+        if img is not None:
+            save_extraction_overview_image(img, rects, filename, output_dir)
+
+    # TODO: Warum 75 / 77 Paaren extrahiert??
 
     # Save extraction results to JSON
     extraction_json_path = os.path.join(output_dir, 'extraction_results.json')
