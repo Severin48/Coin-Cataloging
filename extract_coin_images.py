@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import os
+import re
 from datetime import datetime
 from sys import maxsize
 from tqdm import tqdm
@@ -13,7 +14,7 @@ from collections import defaultdict
 def save_debug_image(image, step_name, filename, folder):
     debug_folder = os.path.join(folder, 'debug')
     os.makedirs(debug_folder, exist_ok=True)
-    debug_path = os.path.join(debug_folder, f"{os.path.splitext(filename)[0]}_{step_name}.jpg")
+    debug_path = os.path.join(debug_folder, f"{os.path.splitext(filename)[0]}_{step_name}.png")
     cv2.imwrite(debug_path, image)
     return debug_path
 
@@ -135,6 +136,7 @@ def pair_images(filenames):
     return complete_pairs
 
 
+# TODO: Make this less strict or replace with different approach
 def assign_to_rows(rectangles, image, filename, output_dir):
     if not rectangles:
         return [], []
@@ -240,22 +242,49 @@ def assign_to_rows(rectangles, image, filename, output_dir):
     return relevant_sequences, relevant_segments
 
 
-def detect_coins():
+def detect_coins(start=""):
     # Create a directory for results with a timestamp
     timestamp = datetime.now().strftime('%Y_%m_%d_%H_%M_%S')
     output_dir = f'results/{timestamp}'
+    debug_dir = output_dir + '/debug'
     os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(debug_dir, exist_ok=True)
 
     # Set the directory for images (relative to the script)
     image_dir = 'images'
-    image_formats = ('.jpg', '.jpeg', '.png', '.bmp')  # Common image formats
 
     # Collect all filenames
-    filenames = os.listdir(image_dir)
+    filenames = sorted(os.listdir(image_dir))
 
     # Pair images into front and back
     pairs = pair_images(filenames)
     print(f"Total image pairs found: {len(pairs)}")
+
+    def nat_key(k):
+        """Turn 'k2_h10_s7' → (2,10,7) so that 10>9 is sorted correctly."""
+        m = re.match(r'k(\d+)_h(\d+)_s(\d+)', k)
+        return tuple(map(int, m.groups())) if m else (float("inf"),)
+
+    sorted_keys = sorted(pairs.keys(), key=nat_key)
+
+    start_key = None
+    if start:
+        if start.endswith(('_r.jpg', '_v.jpg')):
+            start_key = start[:-6]
+        else:
+            start_key = start
+
+    if start_key:
+        skipped_keys = [k for k in sorted_keys if nat_key(k) < nat_key(start_key)]
+        process_keys = [k for k in sorted_keys if nat_key(k) >= nat_key(start_key)]
+    else:
+        skipped_keys = []
+        process_keys = sorted_keys
+
+    if skipped_keys:
+        print(f"Skipping {skipped_keys[0]} to {skipped_keys[-1]} "
+              f"({len(skipped_keys)} pairs total)")
+        # print('Skipped pairs:', ', '.join(skipped_keys))
 
     # Dictionaries to store detections and layouts
     detections = {}
@@ -265,7 +294,8 @@ def detect_coins():
     all_extracted_rectangles = defaultdict(list)
 
     # First pass: Detect coins in all images and store their rectangles
-    for pair_key, pair in tqdm(pairs.items(), desc="Processing image pairs"):
+    for pair_key in tqdm(process_keys, desc='Processing image pairs'):
+        pair = pairs[pair_key]
         for side, filename in pair.items():
             image_path = os.path.join(image_dir, filename)
             img = cv2.imread(image_path)
@@ -296,7 +326,7 @@ def detect_coins():
             save_debug_image(img_all_contours, 'all_contours', filename, output_dir)
 
             # Filter contours by area
-            filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 40000]
+            filtered_contours = [cnt for cnt in contours if cv2.contourArea(cnt) > 30000]
             print(f"[{filename}] Contours after area filtering: {len(filtered_contours)}")
 
             # Extract bounding rectangles from contours
@@ -335,8 +365,8 @@ def detect_coins():
             total_coins += len(filtered_rectangles)
 
             # Save images with rectangles
-            save_debug_image(img_kept, 'kept_rectangles', filename, output_dir)
-            save_debug_image(img_removed, 'removed_rectangles', filename, output_dir)
+            save_debug_image(img_kept, 'kept_rectangles', filename, debug_dir)
+            save_debug_image(img_removed, 'removed_rectangles', filename, debug_dir)
 
             output_contour_path = os.path.join(output_dir, f"{os.path.splitext(filename)[0]}_contour.jpg")
             cv2.imwrite(output_contour_path, img_kept)
@@ -356,7 +386,8 @@ def detect_coins():
     extraction_folder = output_dir  # Use the same output directory
     extraction_results = []
 
-    for pair_key, pair in tqdm(pairs.items(), desc="Matching and extracting coins"):
+    for pair_key in tqdm(process_keys, desc='Matching and extracting coins'):
+        pair = pairs[pair_key]
         front_filename = pair['front']
         back_filename = pair['back']
         layout_front = layouts.get(front_filename, [])
@@ -414,8 +445,6 @@ def detect_coins():
         img = cv2.imread(image_path)
         if img is not None:
             save_extraction_overview_image(img, rects, filename, output_dir)
-
-    # TODO: Warum 75 / 77 Paaren extrahiert??
 
     # Save extraction results to JSON
     extraction_json_path = os.path.join(output_dir, 'extraction_results.json')
