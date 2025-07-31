@@ -4,8 +4,8 @@ if __name__ == '__main__':
     import time
 
     start_time = time.time()
-    # detect_coins()
-    detect_coins(start="k1_h2_s1")
+    detect_coins()
+    # detect_coins(start="k1_h2_s7")
     seconds = (time.time() - start_time)
     print(f"Time needed to detect coins: {round(seconds,2)} s")
 

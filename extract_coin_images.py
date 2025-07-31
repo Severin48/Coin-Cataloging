@@ -136,110 +136,54 @@ def pair_images(filenames):
     return complete_pairs
 
 
-# TODO: Make this less strict or replace with different approach
-def assign_to_rows(rectangles, image, filename, output_dir):
+def assign_to_rows_by_center(rectangles, image, filename, debug_dir, min_gap_factor=0.6):
+    """
+    Grouping bounding boxes by their y-value.
+    """
+    # Keine Rechtecke → keine Reihen
     if not rectangles:
-        return [], []
+        return []
 
-    print(f"[{filename}] Assigning rectangles to rows.")
+    centers = [(rect[1] + rect[3] / 2, idx) for idx, rect in enumerate(rectangles)]
+    centers.sort(key=lambda x: x[0])
 
-    num_segments = 100
-    segment_height = max(image.shape[0] / num_segments, 1.)
+    heights = [rect[3] for rect in rectangles]
+    median_h = np.median(heights)
 
-    # For each segment, find rectangles that overlap with the segment
-    segments = [[] for _ in range(num_segments)]
+    # Clustering
+    rows = []
+    current = [centers[0][1]]
+    mean_y = centers[0][0]
+    for cy, idx in centers[1:]:
+        if abs(cy - mean_y) < median_h * min_gap_factor:
+            current.append(idx)
+            mean_y = np.mean([rectangles[i][1] + rectangles[i][3] / 2 for i in current])
+        else:
+            rows.append(current)
+            current = [idx]
+            mean_y = cy
+    rows.append(current)
 
-    for idx, rect in enumerate(rectangles):
-        x, y, w, h, _ = rect
-        rect_top = y
-        rect_bottom = y + h
+    debug_img = image.copy()
+    for row in rows:
+        y_centers = [rectangles[i][1] + rectangles[i][3] / 2 for i in row]
+        avg_y = int(sum(y_centers) / len(y_centers))
+        cv2.line(debug_img,
+                 (0, avg_y),
+                 (debug_img.shape[1], avg_y),
+                 (0, 255, 0), 2)
 
-        # Find which segments the rectangle overlaps
-        start_segment = int(rect_top / segment_height)
-        end_segment = int(rect_bottom / segment_height)
+    base = os.path.splitext(filename)[0]
+    debug_path = os.path.join(debug_dir, f"{base}_rows.png")
+    cv2.imwrite(debug_path, debug_img)
 
-        # Clamp the values
-        start_segment = max(0, min(num_segments - 1, start_segment))
-        end_segment = max(0, min(num_segments - 1, end_segment))
+    sequences = []
+    for row in rows:
+        seq = [(rectangles[i], i) for i in row]
+        seq.sort(key=lambda item: item[0][0])
+        sequences.append(seq)
 
-        for seg_idx in range(start_segment, end_segment + 1):
-            segments[seg_idx].append((rect, idx))
-
-    # Now, for each segment, sort the rectangles by x (left to right)
-    for seg_idx in range(num_segments):
-        segments[seg_idx].sort(key=lambda item: item[0][0])  # item[0][0] is x of rectangle
-
-    # Now, for each segment, group sequences starting with the same leftmost rectangle
-    sequences_dict = {}  # key: leftmost rectangle index, value: list of sequences
-
-    for seg_idx in range(num_segments):
-        rects_in_segment = segments[seg_idx]
-        if not rects_in_segment:
-            continue
-
-        # Get rectangle indices in order
-        rect_indices = [idx for (rect, idx) in rects_in_segment]
-
-        # Get the leftmost rectangle index
-        leftmost_idx = rect_indices[0]
-
-        # Add the sequence to the list for this leftmost rectangle
-        if leftmost_idx not in sequences_dict:
-            sequences_dict[leftmost_idx] = []
-
-        sequences_dict[leftmost_idx].append((seg_idx, rect_indices))
-
-    # Erstelle eine Menge, um alle Indizes zu sammeln, die irgendwo in den Sequenzen vorkommen
-    used_indices = set()
-
-    # Füge alle Indizes hinzu, die in den Sequenzen vorkommen (außer die ersten Indizes)
-    for value in sequences_dict.values():
-        for _, seq_list in value:
-            used_indices.update(seq_list[1:])
-
-    # Gehe durch die sequences_dict und lösche alle Einträge, deren Startindex in der used_indices-Menge ist
-    keys_to_delete = [key for key in sequences_dict if key in used_indices]
-
-    for key in keys_to_delete:
-        del sequences_dict[key]
-
-    # Now, find the longest sequence(s)
-    max_lengths_dict = {}
-
-    for leftmost_idx, seq_list in sequences_dict.items():
-        max_lengths_dict[leftmost_idx] = 0
-        for _, seq in seq_list:
-            max_lengths_dict[leftmost_idx] = max(max_lengths_dict[leftmost_idx], len(seq))
-
-    # From sequences with max_length, select the one in the middle
-    if not max_lengths_dict:
-        print(f"[{filename}] No sequences found.")
-        return [], []
-
-    relevant_segments = []
-    relevant_sequences = []
-    min_max_index = {}
-    for leftmost_idx, seq_list in sequences_dict.items():
-        min_max_index[leftmost_idx] = [maxsize, -maxsize]
-        for seg_idx, seq in seq_list:
-            if len(seq) == max_lengths_dict[leftmost_idx]:
-                if seg_idx < min_max_index[leftmost_idx][0]:
-                    min_max_index[leftmost_idx][0] = seg_idx
-                if seg_idx > min_max_index[leftmost_idx][1]:
-                    min_max_index[leftmost_idx][1] = seg_idx
-        index = sum(min_max_index[leftmost_idx]) // 2
-        relevant_sequences.append(segments[index])
-        relevant_segments.append(index)
-
-    relevant_sequences = [sorted(seq, key=lambda rect: rect[0][0]) for seq in relevant_sequences]
-
-    # Sortiere die äußere Liste nach dem y-Wert des ersten Eintrags pro Liste
-    relevant_sequences.sort(key=lambda seq: seq[0][0][1])
-
-    print(f"[{filename}] Found {len(relevant_sequences)} rows.")
-    draw_rows_debug_image(image, num_segments, segment_height, relevant_segments, filename, output_dir)
-
-    return relevant_sequences, relevant_segments
+    return sequences
 
 
 def detect_coins(start=""):
@@ -374,16 +318,15 @@ def detect_coins(start=""):
             # Store the filtered rectangles
             detections[filename] = filtered_rectangles
 
-            assigned_rectangles, segments = assign_to_rows(filtered_rectangles, img, filename, output_dir)
+            assigned_sequences = assign_to_rows_by_center(filtered_rectangles, img, filename, debug_dir)
 
             # Store the layout
             layouts[filename] = {
-                'sequences': assigned_rectangles,
-                'segments': segments
+                'sequences': assigned_sequences,
+                # 'segments': segments
             }
 
-    # Now, process each pair to match coins and extract them
-    extraction_folder = output_dir  # Use the same output directory
+    extraction_folder = output_dir
     extraction_results = []
 
     for pair_key in tqdm(process_keys, desc='Matching and extracting coins'):
