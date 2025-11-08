@@ -3,7 +3,6 @@ import numpy as np
 import os
 import re
 from datetime import datetime
-from sys import maxsize
 from tqdm import tqdm
 import platform
 import subprocess
