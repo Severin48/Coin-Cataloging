@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import cv2
 import numpy as np
 import os
@@ -8,9 +10,52 @@ import platform
 import subprocess
 import json
 from collections import defaultdict
+from typing import (
+    DefaultDict,
+    Dict,
+    Iterable,
+    List,
+    Optional,
+    Sequence,
+    Tuple,
+    TypedDict,
+)
+
+# Type aliases
+
+# OpenCV images
+NDArray = np.ndarray
+
+# Rectangle as (x, y, w, h, area)
+Rect = Tuple[int, int, int, int, float]
+
+# Row sequence: list of (Rect, original_index)
+RectIdx = Tuple[Rect, int]
+RowSequence = List[RectIdx]
 
 
-def save_debug_image(image, step_name, filename, folder):
+# Layout per filename
+class Layout(TypedDict):
+    sequences: List[RowSequence]
+
+
+# Pair mapping: '..._v' → 'front', '..._r' → 'back'
+ImagePair = Dict[str, str]  # keys: "front", "back"
+
+
+# One JSON entry for an extracted coin
+class ExtractionEntry(TypedDict):
+    pair_key: str
+    coin_number: int
+    front_image: str
+    back_image: str
+    front_extracted: str
+    back_extracted: str
+    front_rect: Dict[str, int]
+    back_rect: Dict[str, int]
+
+
+def save_debug_image(image: NDArray, step_name: str, filename: str, folder: str) -> str:
     debug_folder = os.path.join(folder, "debug")
     os.makedirs(debug_folder, exist_ok=True)
     debug_path = os.path.join(
@@ -20,7 +65,9 @@ def save_debug_image(image, step_name, filename, folder):
     return debug_path
 
 
-def save_extracted_image(image, coin_nr, side, filename, folder):
+def save_extracted_image(
+    image: NDArray, coin_nr: int, side: str, filename: str, folder: str
+) -> str:
     extracted_folder = os.path.join(folder, "extracted")
     os.makedirs(extracted_folder, exist_ok=True)
     # Adjusted naming as per user’s change to ensure paired sides are next to each other
@@ -33,51 +80,45 @@ def save_extracted_image(image, coin_nr, side, filename, folder):
 
 
 def draw_rows_debug_image(
-    image,
-    num_segments,
-    segment_height,
-    selected_segments,
-    filename,
-    output_dir,
-    save_debug=False,
-):
+    image: NDArray,
+    num_segments: int,
+    segment_height: float,
+    selected_segments: Optional[Iterable[int]],
+    filename: str,
+    output_dir: str,
+    save_debug: bool = False,
+) -> None:
     img_copy = image.copy()
     overlay = img_copy.copy()
     image_height, image_width = img_copy.shape[:2]
 
+    selected = set(selected_segments or [])
+
     for seg_idx in range(num_segments):
         y_start = int(seg_idx * segment_height)
         y_end = int((seg_idx + 1) * segment_height)
-        if selected_segments and seg_idx in selected_segments:
-            color = (0, 255, 0)  # Grün für relevante Segmente
+        if selected and seg_idx in selected:
+            color = (0, 255, 0)  # Grün
         else:
-            color = (
-                255,
-                255,
-                255,
-            )  # Rot für Segmente mit Rechtecken, die nicht ausgewählt sind
+            color = (255, 255, 255)  # Weiß
 
-        # Zeichne halbtransparentes Rechteck auf das Overlay
         cv2.rectangle(overlay, (0, y_start), (image_width, y_end), color, -1)
 
-    # Überlagere das Overlay mit Transparenz auf das Originalbild
-    alpha = 0.4  # Transparenzfaktor
+    alpha = 0.4
     cv2.addWeighted(overlay, alpha, img_copy, 1 - alpha, 0, img_copy)
 
-    # Speichere das Debug-Bild
     if save_debug:
         save_debug_image(img_copy, "rows", filename, output_dir)
 
 
-def save_extraction_overview_image(image, rectangles, filename, folder):
+def save_extraction_overview_image(
+    image: NDArray, rectangles: Sequence[Rect], filename: str, folder: str
+) -> str:
     overview_img = image.copy()
 
-    for x, y, w, h, area in rectangles:
-        cv2.rectangle(
-            overview_img, (x, y), (x + w, y + h), (0, 0, 255), 2
-        )  # Red for extracted coins
+    for x, y, w, h, _area in rectangles:
+        cv2.rectangle(overview_img, (x, y), (x + w, y + h), (0, 0, 255), 2)
 
-    # Save the overview image in the main folder
     overview_path = os.path.join(
         folder, f"{os.path.splitext(filename)[0]}_extracted.png"
     )
@@ -85,18 +126,18 @@ def save_extraction_overview_image(image, rectangles, filename, folder):
     return overview_path
 
 
-# Function to check if a rectangle is inside another
-def is_inside(inner, outer):
+def is_inside(inner: Rect, outer: Rect) -> bool:
     x1, y1, w1, h1, _ = inner
     x2, y2, w2, h2, _ = outer
     return x1 > x2 and y1 > y2 and (x1 + w1) < (x2 + w2) and (y1 + h1) < (y2 + h2)
 
 
-# Function to remove rectangles inside larger rectangles
-def filter_nested_rectangles(rectangles, filename, verbose=False):
+def filter_nested_rectangles(
+    rectangles: Sequence[Rect], filename: str, verbose: bool = False
+) -> List[Rect]:
     if verbose:
         print(f"[{filename}] Rectangles before filtering nested: {len(rectangles)}")
-    filtered = []
+    filtered: List[Rect] = []
     for i, rect1 in enumerate(rectangles):
         keep = True
         for j, rect2 in enumerate(rectangles):
@@ -112,15 +153,17 @@ def filter_nested_rectangles(rectangles, filename, verbose=False):
     return filtered
 
 
-def filter_non_squares(rectangles, filename, verbose=False):
+def filter_non_squares(
+    rectangles: Sequence[Rect], filename: str, verbose: bool = False
+) -> List[Rect]:
     if verbose:
         print(
             f"[{filename}] Rectangles before filtering other shapes: {len(rectangles)}"
         )
-    filtered = []
+    filtered: List[Rect] = []
     for rect in rectangles:
         _, _, w, h, _ = rect
-        ratio = w / h
+        ratio = w / h if h != 0 else 0.0
         if ratio > 1.5 or ratio < 0.75:
             if verbose:
                 print(
@@ -133,66 +176,72 @@ def filter_non_squares(rectangles, filename, verbose=False):
     return filtered
 
 
-# Function to open images after processing
-def open_image(image_path):
+def open_image(image_path: str) -> None:
     if platform.system() == "Windows":
-        os.startfile(image_path)
+        os.startfile(image_path)  # type: ignore[attr-defined]
     elif platform.system() == "Darwin":  # macOS
         subprocess.call(["open", image_path])
     else:  # Linux
         subprocess.call(["xdg-open", image_path])
 
 
-def open_images(image_paths):
+def open_images(image_paths: Iterable[str]) -> None:
     for img in image_paths:
         open_image(img)
 
 
-# Function to pair front and back images based on filename labels
-def pair_images(filenames):
-    pairs = defaultdict(dict)
+def pair_images(filenames: Sequence[str]) -> Dict[str, ImagePair]:
+    pairs: DefaultDict[str, ImagePair] = defaultdict(dict)
     for filename in filenames:
         if not any(
             filename.lower().endswith(ext) for ext in (".jpg", ".jpeg", ".png", ".bmp")
         ):
             continue
-        # Example filename: k1_h2_s4_v.jpg or k1_h2_s4_r.jpg
-        name_part, ext = os.path.splitext(filename)
+        # Example: k1_h2_s4_v.jpg or k1_h2_s4_r.jpg
+        name_part, _ext = os.path.splitext(filename)
         if name_part.endswith("_v"):
             key = name_part[:-2]  # Remove '_v'
             pairs[key]["front"] = filename
         elif name_part.endswith("_r"):
             key = name_part[:-2]  # Remove '_r'
             pairs[key]["back"] = filename
-    # Filter out incomplete pairs
-    complete_pairs = {k: v for k, v in pairs.items() if "front" in v and "back" in v}
+    complete_pairs: Dict[str, ImagePair] = {
+        k: v for k, v in pairs.items() if "front" in v and "back" in v
+    }
     return complete_pairs
 
 
 def assign_to_rows_by_center(
-    rectangles, image, filename, debug_dir, min_gap_factor=0.6, save_debug=False
-):
+    rectangles: Sequence[Rect],
+    image: NDArray,
+    filename: str,
+    debug_dir: str,
+    min_gap_factor: float = 0.6,
+    save_debug: bool = False,
+) -> List[RowSequence]:
     """
-    Grouping bounding boxes by their y-value.
+    Group bounding boxes by their vertical centers into row sequences.
     """
-    # Keine Rechtecke → keine Reihen
     if not rectangles:
         return []
 
-    centers = [(rect[1] + rect[3] / 2, idx) for idx, rect in enumerate(rectangles)]
+    centers: List[Tuple[float, int]] = [
+        (rect[1] + rect[3] / 2, idx) for idx, rect in enumerate(rectangles)
+    ]
     centers.sort(key=lambda x: x[0])
 
-    heights = [rect[3] for rect in rectangles]
-    median_h = np.median(heights)
+    heights: List[int] = [rect[3] for rect in rectangles]
+    median_h: float = float(np.median(heights)) if heights else 0.0
 
-    # Clustering
-    rows = []
-    current = [centers[0][1]]
-    mean_y = centers[0][0]
+    rows: List[List[int]] = []
+    current: List[int] = [centers[0][1]]
+    mean_y: float = centers[0][0]
     for cy, idx in centers[1:]:
         if abs(cy - mean_y) < median_h * min_gap_factor:
             current.append(idx)
-            mean_y = np.mean([rectangles[i][1] + rectangles[i][3] / 2 for i in current])
+            mean_y = float(
+                np.mean([rectangles[i][1] + rectangles[i][3] / 2 for i in current])
+            )
         else:
             rows.append(current)
             current = [idx]
@@ -210,16 +259,21 @@ def assign_to_rows_by_center(
     if save_debug:
         cv2.imwrite(debug_path, debug_img)
 
-    sequences = []
+    sequences: List[RowSequence] = []
     for row in rows:
-        seq = [(rectangles[i], i) for i in row]
+        seq: RowSequence = [(rectangles[i], i) for i in row]
         seq.sort(key=lambda item: item[0][0])
         sequences.append(seq)
 
     return sequences
 
 
-def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False):
+def detect_coins(
+    start: str = "",
+    save_extracted: bool = False,
+    save_debug: bool = False,
+    verbose: bool = False,
+) -> None:
     # Create a directory for results with a timestamp
     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
     output_dir = f"results/{timestamp}"
@@ -228,7 +282,6 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
     if save_debug:
         os.makedirs(debug_dir, exist_ok=True)
 
-    # Set the directory for images (relative to the script)
     image_dir = "images"
 
     # Collect all filenames
@@ -238,14 +291,14 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
     pairs = pair_images(filenames)
     print(f"Total image pairs found: {len(pairs)}")
 
-    def nat_key(k):
+    def nat_key(k: str) -> Tuple[int, ...]:
         """Turn 'k2_h10_s7' → (2,10,7) so that 10>9 is sorted correctly."""
         m = re.match(r"k(\d+)_h(\d+)_s(\d+)", k)
-        return tuple(map(int, m.groups())) if m else (float("inf"),)
+        return tuple(map(int, m.groups())) if m else (float("inf"),)  # type: ignore[return-value]
 
     sorted_keys = sorted(pairs.keys(), key=nat_key)
 
-    start_key = None
+    start_key: Optional[str] = None
     if start:
         if start.endswith(("_r.jpg", "_v.jpg")):
             start_key = start[:-6]
@@ -264,14 +317,12 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
             f"Skipping {skipped_keys[0]} to {skipped_keys[-1]} "
             f"({len(skipped_keys)} pairs total)"
         )
-        # print('Skipped pairs:', ', '.join(skipped_keys))
 
-    # Dictionaries to store detections and layouts
-    detections = {}
-    layouts = {}
+    detections: Dict[str, List[Rect]] = {}
+    layouts: Dict[str, Layout] = {}
     total_coins = 0
 
-    all_extracted_rectangles = defaultdict(list)
+    all_extracted_rectangles: DefaultDict[str, List[Rect]] = defaultdict(list)
 
     # First pass: Detect coins in all images and store their rectangles
     for pair_key in tqdm(process_keys, desc="Processing image pairs"):
@@ -283,37 +334,28 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
                 print(f"Failed to read image: {filename}")
                 continue
 
-            # Convert to grayscale
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            # Apply Gaussian Blur to reduce noise
             blurred = cv2.GaussianBlur(gray, (11, 11), 0)
-            # Edge detection
             edges_img = cv2.Canny(blurred, 40, 80)
             if save_debug:
                 save_debug_image(edges_img, "edges", filename, output_dir)
 
-            # Dilate edges to close gaps
             kernel = np.ones((11, 11), np.uint8)
             edges_dilated = cv2.dilate(edges_img, kernel, iterations=1)
             if save_debug:
                 save_debug_image(edges_dilated, "edges_dilated", filename, output_dir)
 
-            # Find contours in the edges_img image
             contours, _ = cv2.findContours(
                 edges_dilated.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
             if verbose:
                 print(f"[{filename}] Initial contours detected: {len(contours)}")
 
-            # Draw all contours for debugging
             img_all_contours = img.copy()
-            cv2.drawContours(
-                img_all_contours, contours, -1, (255, 0, 0), 2
-            )  # Blue contours
+            cv2.drawContours(img_all_contours, contours, -1, (255, 0, 0), 2)
             if save_debug:
                 save_debug_image(img_all_contours, "all_contours", filename, output_dir)
 
-            # Filter contours by area
             filtered_contours = [
                 cnt for cnt in contours if cv2.contourArea(cnt) > 30000
             ]
@@ -322,19 +364,16 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
                     f"[{filename}] Contours after area filtering: {len(filtered_contours)}"
                 )
 
-            # Extract bounding rectangles from contours
-            rectangles = []
+            rectangles: List[Rect] = []
             detected_objects = 0
 
             for contour in filtered_contours:
-                area = cv2.contourArea(contour)
+                area = float(cv2.contourArea(contour))
                 hull = cv2.convexHull(contour)
                 x, y, w, h = cv2.boundingRect(hull)
-                rectangles.append((x, y, w, h, area))
+                rectangles.append((int(x), int(y), int(w), int(h), area))
 
-            # Filter nested rectangles
             filtered_rectangles = filter_nested_rectangles(rectangles, filename)
-            # Filter non-square rectangles
             filtered_rectangles = filter_non_squares(filtered_rectangles, filename)
 
             img_kept = img.copy()
@@ -342,9 +381,7 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
 
             for x, y, w, h, area in filtered_rectangles:
                 detected_objects += 1
-                cv2.rectangle(
-                    img_kept, (x, y), (x + w, y + h), (0, 255, 0), 2
-                )  # Green for kept
+                cv2.rectangle(img_kept, (x, y), (x + w, y + h), (0, 255, 0), 2)
                 label = f"{detected_objects}"
                 cv2.putText(
                     img_kept,
@@ -355,24 +392,18 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
                     (0, 255, 0),
                     2,
                 )
-                # print(f"[{filename}] Detected rectangle {detected_objects}: x={x}, y={y}, w={w}, h={h}, area={area}")
 
-            # Optionally, draw removed rectangles in red
             for rect in rectangles:
                 if rect not in filtered_rectangles:
                     x, y, w, h, area = rect
                     if verbose:
                         print(f"[{filename}] Area of removed rectangle: {area}")
-                    cv2.rectangle(
-                        img_removed, (x, y), (x + w, y + h), (0, 0, 255), 2
-                    )  # Red for removed
+                    cv2.rectangle(img_removed, (x, y), (x + w, y + h), (0, 0, 255), 2)
 
             total_coins += len(filtered_rectangles)
 
-            # Save images with rectangles
             if save_debug:
                 save_debug_image(img_kept, "kept_rectangles", filename, debug_dir)
-            if save_debug:
                 save_debug_image(img_removed, "removed_rectangles", filename, debug_dir)
 
             output_contour_path = os.path.join(
@@ -381,28 +412,25 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
             if save_debug:
                 cv2.imwrite(output_contour_path, img_kept)
 
-            # Store the filtered rectangles
             detections[filename] = filtered_rectangles
 
             assigned_sequences = assign_to_rows_by_center(
                 filtered_rectangles, img, filename, debug_dir
             )
 
-            # Store the layout
             layouts[filename] = {
                 "sequences": assigned_sequences,
-                # 'segments': segments
             }
 
     extraction_folder = output_dir
-    extraction_results = []
+    extraction_results: List[ExtractionEntry] = []
 
     for pair_key in tqdm(process_keys, desc="Matching and extracting coins"):
         pair = pairs[pair_key]
         front_filename = pair["front"]
         back_filename = pair["back"]
-        layout_front = layouts.get(front_filename, [])
-        layout_back = layouts.get(back_filename, [])
+        layout_front = layouts.get(front_filename)
+        layout_back = layouts.get(back_filename)
 
         if not layout_front or not layout_back:
             print(
@@ -425,26 +453,24 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
             back_rects = layout_back["sequences"][row]
 
             for front_rect, back_rect in zip(front_rects, back_rects):
-                x_f, y_f, w_f, h_f, _ = front_rect[0]
-                x_b, y_b, w_b, h_b, _ = back_rect[0]
+                x_f, y_f, w_f, h_f, _af = front_rect[0]
+                x_b, y_b, w_b, h_b, _ab = back_rect[0]
 
-                extracted_front_path = extracted_back_path = ""
+                extracted_front_path = ""
+                extracted_back_path = ""
 
-                # Extract front coin
                 coin_front = img_front[y_f : y_f + h_f, x_f : x_f + w_f]
                 if save_extracted:
                     extracted_front_path = save_extracted_image(
                         coin_front, idx + 1, "front", front_filename, extraction_folder
                     )
 
-                # Extract back coin
                 coin_back = img_back[y_b : y_b + h_b, x_b : x_b + w_b]
                 if save_extracted:
                     extracted_back_path = save_extracted_image(
                         coin_back, idx + 1, "back", back_filename, extraction_folder
                     )
 
-                # Store extraction info
                 extraction_results.append(
                     {
                         "pair_key": pair_key,
@@ -459,9 +485,12 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
                 )
                 idx += 1
 
-                # Collect extracted rectangles for the overview image
-                all_extracted_rectangles[front_filename].append((x_f, y_f, w_f, h_f, _))
-                all_extracted_rectangles[back_filename].append((x_b, y_b, w_b, h_b, _))
+                all_extracted_rectangles[front_filename].append(
+                    (x_f, y_f, w_f, h_f, _af)
+                )
+                all_extracted_rectangles[back_filename].append(
+                    (x_b, y_b, w_b, h_b, _ab)
+                )
 
     for filename, rects in tqdm(
         all_extracted_rectangles.items(), desc="Saving extraction results"
@@ -471,7 +500,6 @@ def detect_coins(start="", save_extracted=False, save_debug=False, verbose=False
         if img is not None and save_debug:
             save_extraction_overview_image(img, rects, filename, output_dir)
 
-    # Save extraction results to JSON
     extraction_json_path = os.path.join(output_dir, "extraction_results.json")
     with open(extraction_json_path, "w") as f:
         json.dump(extraction_results, f, indent=4)
