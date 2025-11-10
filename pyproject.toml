@@ -3,8 +3,9 @@ name = "Coins-Cataloging"
 version = "0.1.0"
 description = "A program to extract closeup-coin images from images containing multiple coins arranged in rows"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
+    "jupyterlab>=4.4.10",
     "numpy>=2.3.4",
     "opencv-python>=4.11.0.86",
     "pillow>=12.0.0",
