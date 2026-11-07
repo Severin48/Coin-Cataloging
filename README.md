@@ -1,8 +1,18 @@
-# 🪙 Coin Extractor – CV Coin Detection & Extraction
+# 🪙 Coin Cataloguing: from scans to a priced spreadsheet
 
-A small computer vision tool to detect coins in scanned images, automatically pair their front (`..._v.jpg`) and back (`..._r.jpg`) sides, and extract them into individual, matched image files.
+This project turns photos of many coins into a catalogue. It detects every coin, pairs its front (`..._v.jpg`) and back (`..._r.jpg`), groups duplicates, and identifies each coin with a vision LLM. It then looks up catalogue data and prices on [Numista](https://en.numista.com) and writes everything to a spreadsheet, so the most valuable coins are easy to find and sell.
 
-The future goal is to use these extracted images to search for the coins online to determine their value.
+## Pipeline & status
+
+| # | Stage | Script | Output (`results/<run>/`) | Status |
+|---|---|---|---|---|
+| 1 | Detect, pair & extract coins (OpenCV) | `main.py` | `extraction_results.json` | ✅ |
+| 2 | Cluster duplicates (ResNet50 + DBSCAN) | `clustering.py`, `check_clusters.py` | `extraction_results_with_groups.json` | ✅ prototype |
+| 3 | Identify each coin (Claude vision, Batch API) | `identify.py` | `identifications.jsonl` | ✅ built, waiting for API key |
+| 4 | Catalogue match + prices (Numista free API) | `numista.py` | `numista_matches.jsonl` | ✅ tested on 6 coins |
+| 5 | Spreadsheet (+ manual `overrides.csv`) | `build_table.py` | `coins.xlsx` | ✅ |
+
+👉 The plan, cost estimates and design decisions are in **[docs/PLAN.md](docs/PLAN.md)**.
 
 ---
 
@@ -56,10 +66,8 @@ The final output is saved in `results/TIMESTAMP/extracted/`. The naming conventi
 
 ## Prerequisites
 
-- **Python** $\geq$ 3.10
-- **[uv](https://docs.astral.sh/uv/)** as the package/environment manager
-- A `pyproject.toml` and `uv.lock` file (you will need to create this; see `uv init`)
-- **Required Python packages**: `opencv-python`, `numpy`, `tqdm`
+- **Python** ≥ 3.12, **[uv](https://docs.astral.sh/uv/)** as the package/environment manager
+- For clustering: an NVIDIA GPU is recommended (developed on an RTX 5070 Ti, CUDA 12.8)
 - **Input Directory**: An `images/` directory in the root of the project.
 - **Naming Convention**: Input images *must* be named with `..._v.jpg` for the front side (Vorderseite) and `..._r.jpg` for the back side (Rückseite).
 
@@ -81,36 +89,55 @@ The final output is saved in `results/TIMESTAMP/extracted/`. The naming conventi
 
 > See the official uv documentation for alternatives.
 
-### 2) Create Project & Install Dependencies
-
-In your new project folder:
+### 2) Install Dependencies
 
 ~~~bash
-# Create a pyproject.toml (if you don't have one)
-uv init
-
-# Add dependencies
-uv pip install opencv-python numpy tqdm
-
-# Create and activate a virtual environment
-uv venv
-
-# Install the packages into the venv
 uv sync
 ~~~
 
-- `uv venv` creates/activates a virtual environment (default: `.venv`).
-- `uv sync` installs the exact versions from your `uv.lock` file.
+PyTorch is pulled from the CUDA 12.8 index on Windows/Linux (see `[tool.uv.sources]` in `pyproject.toml`) and from PyPI on macOS.
+
+### 3) API keys (stages 3–4)
+
+Create a `.env` file in the project root. It is gitignored.
+
+~~~
+ANTHROPIC_API_KEY=...
+NUMISTA_API_KEY=...        # free plan: 2000 requests/month, https://en.numista.com/api/
+SILVER_EUR_PER_G=...       # EUR per gram of pure silver; update by hand before valuing / selling
+GOLD_EUR_PER_G=...
+ASSUMED_GRADE=xf           # g, vg, f, vf, xf, au, unc: grade used for the value estimate
+~~~
 
 ---
 
 ## Usage
 
-The provided `extract_coin_images.py` script is a module. To execute, run `main.py`.
-
 ~~~bash
-uv run main.py
+uv run main.py                 # 1) detect & extract → results/<timestamp>/extraction_results.json
+uv run clustering.py           # 2) embed + cluster        (all stages take --run results/<timestamp>)
+uv run check_clusters.py       #    one folder per cluster for visual review + histogram
+uv run identify.py --estimate  # 3) free token count → cost projection
+uv run identify.py --sample 30 #    ~$1 test run, prints measured cost per coin
+uv run identify.py --batch     #    submit the rest via the Batch API (50 % cheaper)
+uv run identify.py --collect --wait
+uv run numista.py              # 4) Numista match + prices, stops at the monthly budget
+uv run numista.py --status     #    quota used this month
+uv run build_table.py          # 5) → results/<run>/coins.xlsx (offline, re-run any time)
 ~~~
+
+### Results and re-valuing
+
+`build_table.py` writes into the run folder:
+
+- `coins.xlsx` has the sheets **Summary**, **Highlights** (confidently valuable coins), **Coins**, **Types**, **Top** and **Review**.
+- `highlights.md` is the same highlights list as Markdown, with Numista, eBay-sold and image links.
+- `valuation.json` records the silver/gold €/g and grade that the values are based on, and when they were taken.
+- `crops/` holds a front and back JPG for every coin. The sheets link to them.
+
+Melt value, estimated value and the totals are **Excel formulas** on the yellow cells `Summary!B3` (silver €/g) and `B4` (gold €/g). Change them in Excel and everything recalculates. Alternatively, update `SILVER_EUR_PER_G` / `GOLD_EUR_PER_G` in `.env` and re-run `uv run build_table.py`, which also refreshes the sorting, the highlights and `valuation.json`. Numista prices are cached; the month they were fetched is shown in the Summary sheet.
+
+The default run is set in `coins_common.py` (`DEFAULT_RUN`). Use **one** results run for all stages, because coin numbering changes whenever extraction changes. Coins are referred to by `coin_id = <pair_key>_coin<coin_number>` (e.g. `b2_s1_coin3`).
 
 ---
 
@@ -194,14 +221,25 @@ This file contains a list of all successfully matched and extracted coin pairs, 
 
 ---
 
-## Roadmap / TODO
+## Working with Claude Code
 
-- 🔎 **Value/Sales Search**: Implement the next step to take the extracted images and search online (e.g., Google Lens, eBay) for value.
-- 🌐 **Web Interface**: Build a simple web UI (e.g., with Streamlit or Gradio) to upload images and view results interactively.
-- 💡 **Improve Detection**:
-  - Experiment with `cv2.HoughCircles` as an alternative to contour filtering.
-  - Train a simple ML model (like a YOLOv8-nano) for more robust detection.
-- 🖱️ **Manual Correction**: Add a GUI step to allow the user to manually click to remove false positives or draw boxes for missed coins.
+Project skills live in `.claude/skills/`:
+
+| Skill | Use it for |
+|---|---|
+| `coin-pipeline` | Running or implementing pipeline stages, conventions, cost and quota rules |
+| `identify-coins` | Identifying or verifying specific coins (review queue, high-value coins) and writing `overrides.csv` |
+| `tune-clustering` | Improving duplicate clustering (eps, DINOv2, swapped sides, rotation) |
+
+`uv run python .claude/skills/identify-coins/crop_pair.py <coin_id> | --group <id>` renders front and back side by side for quick review.
+
+---
+
+## Roadmap
+
+See [docs/PLAN.md](docs/PLAN.md). In short: LLM identification of every coin, then Numista text search and prices (free tier), then `coins.xlsx` with melt value, Numista prices, proof links and a review sheet. A GUI is intentionally out of scope: Excel plus `overrides.csv` replaces it.
+
+Detection ideas for later: `cv2.HoughCircles` instead of contour filtering, or a small YOLO model.
 
 ---
 

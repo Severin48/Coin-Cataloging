@@ -5,12 +5,28 @@ description = "A program to extract closeup-coin images from images containing m
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "anthropic>=2.6.0",
     "jupyterlab>=4.4.10",
     "matplotlib>=3.10.7",
     "numpy>=2.3.4",
     "opencv-python>=4.11.0.86",
+    "openpyxl>=3.1.5",
     "pillow>=12.0.0",
+    "python-dotenv>=1.2.4",
+    "requests>=2.32.5",
     "ruff>=0.14.4",
+    "scikit-learn>=1.9.1",
     "scipy>=1.16.3",
+    "torch==2.9.1",
+    "torchvision==0.24.1",
     "tqdm>=4.67.1",
 ]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }]
+torchvision = [{ index = "pytorch-cu128", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

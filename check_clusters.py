@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 import cv2
@@ -17,7 +18,7 @@ TODO:
 # --- Konfiguration ---
 
 # 1. Die JSON-Datei, die Ihre Cluster-Ergebnisse (mit group_id) enthält
-JSON_IN = "results/2025_08_19_20_14_09/extraction_results_with_groups.json"
+JSON_IN = "results/2025_11_16_15_40_15/extraction_results_with_groups.json"
 
 # 2. Das Verzeichnis, in dem die *Originalbilder* liegen (z.B. k1_h1_s1_v.jpg)
 IMG_DIR = "images"
@@ -156,6 +157,15 @@ def extract_rois_to_folders(grouped_data, img_dir, review_dir):
 
 
 def main():
+    global JSON_IN, RESULT_TIMESTAMP_DIR, REVIEW_DIR
+    parser = argparse.ArgumentParser(description="Cluster-Ordner zur Überprüfung erstellen")
+    parser.add_argument("--run", default=RESULT_TIMESTAMP_DIR, help="results/<timestamp>")
+    parser.add_argument("--show", action="store_true", help="Histogramm anzeigen")
+    args = parser.parse_args()
+    RESULT_TIMESTAMP_DIR = args.run
+    JSON_IN = os.path.join(args.run, "extraction_results_with_groups.json")
+    REVIEW_DIR = os.path.join(args.run, "cluster_review_output")
+
     # 1. JSON-Daten laden
     try:
         with open(JSON_IN, 'r', encoding='utf-8') as f:
@@ -201,7 +211,8 @@ def main():
     for i, (group_id, items) in enumerate(sorted_groups[:10]):
         print(f"  Ordner 'group_{group_id}': {len(items)} Münzen")
 
-    plt.show()
+    if args.show:
+        plt.show()
 
 
 if __name__ == "__main__":

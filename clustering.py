@@ -32,21 +32,25 @@ Reporting: CSV-Export (pair_key, coin_number, group_id, Felder…) + pro Gruppe 
 
 """
 
+import argparse
 import json
 import os
 import cv2
 import numpy as np
 import torch
 import torch.nn as nn
-from torchvision import models, transforms
+from torchvision import models
 from PIL import Image
 from sklearn.cluster import DBSCAN
 from tqdm import tqdm  # Progress bar
 
+from coins_common import DEFAULT_RUN
+
 # --- CONFIGURATION ---
-JSON_IN = "results/2025_08_19_20_14_09/extraction_results.json"
+# Defaults; override with --run / --eps
+JSON_IN = os.path.join(DEFAULT_RUN, "extraction_results.json")
 IMG_DIR = "images"
-JSON_OUT = "results/2025_08_19_20_14_09/extraction_results_with_groups.json"
+JSON_OUT = os.path.join(DEFAULT_RUN, "extraction_results_with_groups.json")
 
 # Clustering Hyperparameters
 # eps: The maximum distance between two samples for one to be considered as in the neighborhood of the other.
@@ -145,7 +149,27 @@ def extract_features(data, model, preprocess, device):
     return np.array(embeddings), valid_indices
 
 
+def embed_images(images_bgr, model, preprocess, device):
+    """L2-normalised embeddings for a list of BGR images (used by numista.py)."""
+    batch = [
+        preprocess(Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)))
+        for img in images_bgr
+    ]
+    with torch.no_grad():
+        features = model(torch.stack(batch).to(device)).cpu().numpy()
+    return features / np.linalg.norm(features, axis=1, keepdims=True)
+
+
 def main():
+    global JSON_IN, JSON_OUT, CLUSTER_EPS
+    parser = argparse.ArgumentParser(description="Cluster duplicate coins")
+    parser.add_argument("--run", default=DEFAULT_RUN, help="results/<timestamp> dir")
+    parser.add_argument("--eps", type=float, default=CLUSTER_EPS)
+    args = parser.parse_args()
+    JSON_IN = os.path.join(args.run, "extraction_results.json")
+    JSON_OUT = os.path.join(args.run, "extraction_results_with_groups.json")
+    CLUSTER_EPS = args.eps
+
     # 1. Load Data
     if not os.path.exists(JSON_IN):
         print(f"Error: Input file {JSON_IN} not found.")
@@ -191,7 +215,7 @@ def main():
     # 6. Statistics
     unique_labels = set(labels)
     n_clusters = len(unique_labels)
-    print(f"\n--- Results ---")
+    print("\n--- Results ---")
     print(f"Total Clusters Found: {n_clusters}")
 
     # Count size of each cluster

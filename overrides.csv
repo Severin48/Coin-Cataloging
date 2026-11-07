@@ -1,0 +1,4 @@
+coin_id,field,value,source,note
+k2_h2_s2_coin11,denomination_value,50,claude-code,"legend reads ELLİ LİRA (fifty), LLM read 25"
+k2_h2_s2_coin11,denomination_title,50 Lira,claude-code,
+k2_h2_s2_coin11,numista_type_id,36927,https://en.numista.com/catalogue/pieces36927.html,50 Lira (Battle of Malazgirt)
