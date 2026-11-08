@@ -11,6 +11,10 @@ Value = max(Numista price at ASSUMED_GRADE, melt value); melt needs SILVER_EUR_P
 GOLD_EUR_PER_G in .env. Without a Numista price the LLM guess is used and marked as such.
 Melt, value and totals are Excel formulas on the Summary metal prices: change the prices
 there and everything recalculates without re-running this script.
+
+--share writes coins_share.xlsx for sending to others: fixed values instead of formulas
+(email and phone previews don't calculate formulas), no links to files on this PC,
+bigger pictures.
 """
 
 from __future__ import annotations
@@ -45,6 +49,9 @@ from coins_common import (
 GRADES = ["g", "vg", "f", "vf", "xf", "au", "unc"]
 REVIEW_VALUE_EUR = 20.0  # verify everything worth at least this before selling
 THUMB_PX = 64
+# --share: fixed values instead of formulas (email/phone previews don't calculate),
+# no links to local files, bigger pictures
+SHARE = False
 HIGHLIGHT_MIN_CONFIDENCE = 0.8
 # Input cells on the Summary sheet, referenced by the formulas
 SILVER_CELL = "Summary!$B$3"
@@ -362,25 +369,35 @@ def value_formulas(letter: Dict[str, str], r: int) -> Dict[str, str]:
     }
 
 
+def sheet_columns(with_thumbs: bool) -> List[Tuple[str, str, int, Optional[str]]]:
+    return [
+        c
+        for c in COLUMNS
+        if (with_thumbs or c[3] != "thumb") and not (SHARE and c[3] == "file")
+    ]
+
+
 def write_coin_sheet(ws, rows: List[Item], with_thumbs: bool) -> None:
-    columns = [c for c in COLUMNS if with_thumbs or c[3] != "thumb"]
+    columns = sheet_columns(with_thumbs)
     letter = {key: get_column_letter(i) for i, (key, *_) in enumerate(columns, start=1)}
     for col, (_, header, width, _) in enumerate(columns, start=1):
         cell = ws.cell(row=1, column=col, value=header)
         cell.font = Font(bold=True)
         cell.fill = HEADER_FILL
         cell.alignment = Alignment(wrap_text=True, vertical="center")
-        ws.column_dimensions[get_column_letter(col)].width = width
+        ws.column_dimensions[get_column_letter(col)].width = (
+            THUMB_PX * 2 / 7 + 2 if kind_is_thumb(columns[col - 1]) else width
+        )
     for r_idx, row in enumerate(rows, start=2):
         if with_thumbs:
             ws.row_dimensions[r_idx].height = THUMB_PX * 0.75 + 4
-        formulas = value_formulas(letter, r_idx)
+        formulas = {} if SHARE else value_formulas(letter, r_idx)
         for col, (key, _, _, kind) in enumerate(columns, start=1):
             value = formulas.get(key, row.get(key))
             if kind == "thumb":
                 if value is not None:
                     ok, buf = cv2.imencode(
-                        ".jpg", value, [cv2.IMWRITE_JPEG_QUALITY, 80]
+                        ".jpg", value, [cv2.IMWRITE_JPEG_QUALITY, 70 if SHARE else 80]
                     )
                     img = XLImage(BytesIO(buf.tobytes()))
                     ws.add_image(img, f"{get_column_letter(col)}{r_idx}")
@@ -399,6 +416,10 @@ def write_coin_sheet(ws, rows: List[Item], with_thumbs: bool) -> None:
             )
     ws.freeze_panes = "C2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{len(rows) + 1}"
+
+
+def kind_is_thumb(column: Tuple[str, str, int, Optional[str]]) -> bool:
+    return column[3] == "thumb"
 
 
 def type_rows(rows: List[Item], coin_row: Dict[str, int], est_col: str) -> List[Item]:
@@ -426,8 +447,12 @@ def type_rows(rows: List[Item], coin_row: Dict[str, int], est_col: str) -> List[
                 "year": first["year"],
                 "subject": first["subject"],
                 "count": len(members),
-                "est_value_eur": f'=IF({ref}="","",{ref})',
-                "total_eur": f'=IF({ref}="","",{ref}*{len(members)})',
+                "est_value_eur": each if SHARE else f'=IF({ref}="","",{ref})',
+                "total_eur": (
+                    (round(each * len(members), 2) if each is not None else None)
+                    if SHARE
+                    else f'=IF({ref}="","",{ref}*{len(members)})'
+                ),
                 "_sort": (each or 0) * len(members),
                 "value_source": first["value_source"],
                 "silver_g_total": round(sum(m["silver_g"] or 0 for m in members), 1)
@@ -472,8 +497,23 @@ def write_summary(
     identified = [r for r in rows if r["confidence"] is not None]
     matched = [r for r in rows if r["match_status"] == "matched"]
     grade = os.environ.get("ASSUMED_GRADE", "xf")
+
+    def total(key: str, only: Optional[str] = None) -> Any:
+        if not SHARE:
+            if only:
+                return f'=SUMIF({col("value_source")},"{only}",{col(key)})'
+            return f"=SUM({col(key)})"
+        return round(
+            sum(r[key] or 0 for r in rows if only is None or r["value_source"] == only),
+            2,
+        )
+
     lines = [
-        ("Valuation inputs", "edit B3/B4: melt and values recalculate", True),
+        (
+            "Valuation inputs",
+            "fixed values at these prices" if SHARE else "edit B3/B4: melt and values recalculate",
+            True,
+        ),
         ("Prices taken from .env on", datetime.now().strftime("%Y-%m-%d %H:%M"), False),
         ("Silver € per g (pure)", env_float("SILVER_EUR_PER_G") or 0, False),
         ("Gold € per g (pure)", env_float("GOLD_EUR_PER_G") or 0, False),
@@ -487,11 +527,11 @@ def write_summary(
         ("Distinct types", len(types), False),
         ("Need review", sum(1 for r in rows if r["needs_review"]), False),
         ("Highlights (confidently valuable)", sum(1 for r in rows if is_highlight(r)), False),
-        ("Total estimated value €", f"=SUM({col('est_value_eur')})", False),
-        ("  of which from LLM guesses €", f'=SUMIF({col("value_source")},"llm_guess",{col("est_value_eur")})', False),
-        ("Total melt value €", f"=SUM({col('melt_eur')})", False),
-        ("Total silver g", f"=SUM({col('silver_g')})", False),
-        ("Total gold g", f"=SUM({col('gold_g')})", False),
+        ("Total estimated value €", total("est_value_eur"), False),
+        ("  of which from LLM guesses €", total("est_value_eur", "llm_guess"), False),
+        ("Total melt value €", total("melt_eur"), False),
+        ("Total silver g", total("silver_g"), False),
+        ("Total gold g", total("gold_g"), False),
     ]  # fmt: skip
     ws.column_dimensions["A"].width = 36
     ws.column_dimensions["B"].width = 40
@@ -622,9 +662,17 @@ def main() -> int:
     )
     parser.add_argument("--run", default=DEFAULT_RUN)
     parser.add_argument("--no-thumbs", action="store_true", help="faster, smaller file")
-    parser.add_argument("--top", type=int, default=100)
+    parser.add_argument("--top", type=int, default=100, help="rows on the Top sheet")
+    parser.add_argument(
+        "--share",
+        action="store_true",
+        help="write coins_share.xlsx to send to others (see above)",
+    )
     args = parser.parse_args()  # fmt: skip
     with_thumbs = not args.no_thumbs
+    global SHARE, THUMB_PX
+    if args.share:
+        SHARE, THUMB_PX = True, 110
 
     rows = build_rows(args.run, with_thumbs)
     rows.sort(
@@ -633,7 +681,7 @@ def main() -> int:
             int(r["coin_id"].split("_coin")[1]),
         )
     )
-    columns = [c for c in COLUMNS if with_thumbs or c[3] != "thumb"]
+    columns = sheet_columns(with_thumbs)
     letter = {key: get_column_letter(i) for i, (key, *_) in enumerate(columns, start=1)}
     coin_row = {r["coin_id"]: i for i, r in enumerate(rows, start=2)}
     types = type_rows(rows, coin_row, letter["est_value_eur"])
@@ -644,7 +692,7 @@ def main() -> int:
     wb = Workbook()
     write_summary(wb.active, rows, types, letter)
     wb.active.title = "Summary"
-    write_coin_sheet(wb.create_sheet("Highlights"), highlights[: args.top], with_thumbs)
+    write_coin_sheet(wb.create_sheet("Highlights"), highlights, with_thumbs)
     write_coin_sheet(wb.create_sheet("Coins"), rows, with_thumbs)
     write_simple_sheet(
         wb.create_sheet("Types"),
@@ -669,11 +717,14 @@ def main() -> int:
         key=lambda r: -r["est_value_eur"],
     )[: args.top]
     write_coin_sheet(wb.create_sheet("Top"), top, with_thumbs)
-    write_coin_sheet(
-        wb.create_sheet("Review"), [r for r in rows if r["needs_review"]], with_thumbs
-    )
+    if not SHARE:  # the review queue is a to-do list for us, not for recipients
+        write_coin_sheet(
+            wb.create_sheet("Review"),
+            [r for r in rows if r["needs_review"]],
+            with_thumbs,
+        )
 
-    out = os.path.join(args.run, "coins.xlsx")
+    out = os.path.join(args.run, "coins_share.xlsx" if SHARE else "coins.xlsx")
     try:
         wb.save(out)
     except PermissionError:

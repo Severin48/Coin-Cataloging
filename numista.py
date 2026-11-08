@@ -73,6 +73,11 @@ ISSUER_ALIASES = {
     "saint thomas and prince": "sao_tome-et-principe",
     "british caribbean territories": "oeco",
 }
+# German states changed rank in 1806: (last year, issuer code), first match wins
+YEAR_ALIASES = {
+    "bavaria": [(1805, "bavaria_electorate"), (9999, "bavaria_kingdom")],
+    "saxony": [(1805, "saxony_electorate"), (9999, "saxony_kingdom")],
+}
 FRACTIONS = {"½": 0.5, "¼": 0.25, "¾": 0.75, "⅓": 1 / 3, "⅔": 2 / 3, "⅛": 0.125}
 STOPWORDS = {"the", "of", "and", "a", "an", "in", "on", "for", "to", "de", "der", "die"}
 
@@ -198,13 +203,17 @@ class IssuerIndex:
         out += [normalize(p) for p in in_parens]
         return list(dict.fromkeys(v for v in out if v))
 
-    def lookup(self, country: Optional[str]) -> Optional[str]:
+    def lookup(
+        self, country: Optional[str], year: Optional[int] = None
+    ) -> Optional[str]:
         if not country:
             return None
         index = self.notgeld_by_name if "notgeld" in country.lower() else self.by_name
         candidates = self.variants(country)
         matches = None
         for name in candidates:
+            if name in YEAR_ALIASES and year:
+                return next(code for last, code in YEAR_ALIASES[name] if year <= last)
             if name in ISSUER_ALIASES:
                 return ISSUER_ALIASES[name]
             if name in index:
@@ -330,8 +339,8 @@ class VisualRanker:
 def search_candidates(
     client: NumistaClient, issuers: IssuerIndex, ident: Item
 ) -> Tuple[Optional[str], List[Item]]:
-    issuer = issuers.lookup(ident.get("country"))
     year = re.match(r"\d{3,4}", ident.get("year") or "")
+    issuer = issuers.lookup(ident.get("country"), int(year.group(0)) if year else None)
     params: Dict[str, Any] = {"object_type": COIN_OBJECT_TYPE, "count": 100}
     if issuer and year:
         result = client.get("/types", issuer=issuer, date=year.group(0), **params)

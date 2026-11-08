@@ -58,6 +58,16 @@ override), and the value comes from a Numista price or melt, not from the LLM gu
 confirmed", is the review queue for `identify-coins`. Always state the metal prices and the
 grade the values assume (`valuation.json`).
 
+## Outliers (suspected rare types, doubtful prices)
+
+`uv run review_outliers.py` writes `<run>/outlier_review.xlsx`: coins where a valuable type
+was suspected (also from `numista_matches_previous.jsonl`), the match is untrusted, or the price
+looks implausible. Hand-written assessments live in `outlier_notes.csv` (repo root, tracked:
+priority, verdict, likely coin and value, why, what to look for). When you assess a new
+outlier, look at the crops first (`crop_pair.py`) and add a row there.
+Known limitation: if the mint mark wasn't readable, the coin is priced as the common mint
+issue of that year, so key-date mints (e.g. Morgan CC) only show up through review.
+
 ## Quick checks
 
 ```bash

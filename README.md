@@ -124,6 +124,7 @@ uv run identify.py --collect --wait
 uv run numista.py              # 4) Numista match + prices, stops at the monthly budget
 uv run numista.py --status     #    quota used this month
 uv run build_table.py          # 5) → results/<run>/coins.xlsx (offline, re-run any time)
+uv run review_outliers.py      #    → outlier_review.xlsx: doubtful high-value matches to check by hand
 ~~~
 
 ### Results and re-valuing
@@ -136,6 +137,8 @@ uv run build_table.py          # 5) → results/<run>/coins.xlsx (offline, re-ru
 - `crops/` holds a front and back JPG for every coin. The sheets link to them.
 
 Melt value, estimated value and the totals are **Excel formulas** on the yellow cells `Summary!B3` (silver €/g) and `B4` (gold €/g). Change them in Excel and everything recalculates. Alternatively, update `SILVER_EUR_PER_G` / `GOLD_EUR_PER_G` in `.env` and re-run `uv run build_table.py`, which also refreshes the sorting, the highlights and `valuation.json`. Numista prices are cached; the month they were fetched is shown in the Summary sheet.
+
+To send the table to someone else, run `uv run build_table.py --share`. This writes `coins_share.xlsx` with fixed values instead of formulas, because email and phone previews don't calculate formulas. It also has no links to files on this PC, bigger pictures, all highlights and no Review sheet (about 13 MB).
 
 The default run is set in `coins_common.py` (`DEFAULT_RUN`). Use **one** results run for all stages, because coin numbering changes whenever extraction changes. Coins are referred to by `coin_id = <pair_key>_coin<coin_number>` (e.g. `b2_s1_coin3`).
 
