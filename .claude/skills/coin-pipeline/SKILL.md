@@ -17,6 +17,11 @@ to run each stage and the conventions that stop the stages from drifting apart.
 | 3 | Identify | `identify.py` | extraction JSON + `images/` | `identifications.jsonl` | **paid (Claude API)** |
 | 4 | Catalogue and prices | `numista.py` | `identifications.jsonl` | `numista_matches.jsonl`, `numista_cache/`, `numista_usage.json` | free quota, 2,000 req/month |
 | 5 | Table | `build_table.py` | all of the above + `overrides.csv` + metal prices in `.env` | `coins.xlsx`, `highlights.md`, `valuation.json`, `crops/` | free |
+| 6 | Analysis | `analyze.py` | same inputs, via `build_table.build_rows` | `analysis/` (`report.md`, PNG plots, `coins_analysis.csv`, `correlations.csv`) | free |
+
+Workbook language: `SUMMARY_LANGUAGE=EN|DE` in `.env` (or `--lang`), handled by `i18n.py`. Only
+written cell text is translated (`tr()`, `localize()`); keep internal keys (`value_source`,
+review reasons, grades) English, because formulas, highlights and `review_outliers.py` compare them.
 
 Shared helpers (default run, `coin_id`, cropping, JSONL, overrides) are in `coins_common.py`.
 Numista cache and monthly counter are global (`results/numista_cache/`, `results/numista_usage.json`),

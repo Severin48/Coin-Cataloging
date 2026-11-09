@@ -107,6 +107,7 @@ NUMISTA_API_KEY=...        # free plan: 2000 requests/month, https://en.numista.
 SILVER_EUR_PER_G=...       # EUR per gram of pure silver; update by hand before valuing / selling
 GOLD_EUR_PER_G=...
 ASSUMED_GRADE=xf           # g, vg, f, vf, xf, au, unc: grade used for the value estimate
+SUMMARY_LANGUAGE=EN        # EN (default) or DE: language of coins.xlsx / coins_share.xlsx
 ~~~
 
 ---
@@ -125,6 +126,7 @@ uv run numista.py              # 4) Numista match + prices, stops at the monthly
 uv run numista.py --status     #    quota used this month
 uv run build_table.py          # 5) → results/<run>/coins.xlsx (offline, re-run any time)
 uv run review_outliers.py      #    → outlier_review.xlsx: doubtful high-value matches to check by hand
+uv run analyze.py              #    → analysis/report.md + plots: value distribution, drivers, melt vs Numista
 ~~~
 
 ### Results and re-valuing
@@ -139,6 +141,10 @@ uv run review_outliers.py      #    → outlier_review.xlsx: doubtful high-value
 Melt value, estimated value and the totals are **Excel formulas** on the yellow cells `Summary!B3` (silver €/g) and `B4` (gold €/g). Change them in Excel and everything recalculates. Alternatively, update `SILVER_EUR_PER_G` / `GOLD_EUR_PER_G` in `.env` and re-run `uv run build_table.py`, which also refreshes the sorting, the highlights and `valuation.json`. Numista prices are cached; the month they were fetched is shown in the Summary sheet.
 
 To send the table to someone else, run `uv run build_table.py --share`. This writes `coins_share.xlsx` with fixed values instead of formulas, because email and phone previews don't calculate formulas. It also has no links to files on this PC, bigger pictures, all highlights and no Review sheet (about 13 MB).
+
+With `SUMMARY_LANGUAGE=DE` (or `--lang DE`) both workbooks are in German: sheet names, headers, labels, country names, LLM grades and the German grade abbreviations (s/ss/vz/st for F/VF/XF/UNC). Subjects and Numista titles stay as catalogued.
+
+`analyze.py` writes `results/<run>/analysis/`: `report.md` with the key numbers and all plots (value distribution and concentration, value by country, era, metal, type and condition, melt vs Numista premium, what the assumed grade does to the total, LLM guess accuracy, mintage vs price), `coins_analysis.csv` (one flat row per coin) and `correlations.csv`.
 
 The default run is set in `coins_common.py` (`DEFAULT_RUN`). Use **one** results run for all stages, because coin numbering changes whenever extraction changes. Coins are referred to by `coin_id = <pair_key>_coin<coin_number>` (e.g. `b2_s1_coin3`).
 

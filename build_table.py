@@ -15,6 +15,9 @@ there and everything recalculates without re-running this script.
 --share writes coins_share.xlsx for sending to others: fixed values instead of formulas
 (email and phone previews don't calculate formulas), no links to files on this PC,
 bigger pictures.
+
+SUMMARY_LANGUAGE=DE in .env (or --lang DE) writes the workbook in German: sheet names,
+headers, labels, countries and grades (s/ss/vz/st). Internal keys stay English.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ from openpyxl.drawing.image import Image as XLImage
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+import i18n
 from coins_common import (
     DEFAULT_RUN,
     Item,
@@ -45,6 +49,7 @@ from coins_common import (
     load_coins,
     read_jsonl,
 )
+from i18n import localize, sheet_ref, source_label, tr
 
 GRADES = ["g", "vg", "f", "vf", "xf", "au", "unc"]
 REVIEW_VALUE_EUR = 20.0  # verify everything worth at least this before selling
@@ -53,9 +58,15 @@ THUMB_PX = 64
 # no links to local files, bigger pictures
 SHARE = False
 HIGHLIGHT_MIN_CONFIDENCE = 0.8
-# Input cells on the Summary sheet, referenced by the formulas
-SILVER_CELL = "Summary!$B$3"
-GOLD_CELL = "Summary!$B$4"
+
+
+def silver_cell() -> str:
+    """Input cells on the Summary sheet, referenced by the formulas."""
+    return f"{sheet_ref('Summary')}!$B$3"
+
+
+def gold_cell() -> str:
+    return f"{sheet_ref('Summary')}!$B$4"
 
 
 def env_float(name: str) -> Optional[float]:
@@ -109,7 +120,9 @@ def ebay_sold_url(ident: Item) -> Optional[str]:
     return f"https://www.ebay.de/sch/i.html?_nkw={quote_plus(query[:80])}&LH_Sold=1&LH_Complete=1"
 
 
-def save_crops(run: str, coin: Item) -> Tuple[str, str, np.ndarray]:
+def save_crops(
+    run: str, coin: Item, need_thumb: bool = True
+) -> Tuple[str, str, Optional[np.ndarray]]:
     """Writes <run>/crops/<coin_id>_front|back.jpg once; returns relative paths + thumb."""
     crop_dir = os.path.join(run, "crops")
     os.makedirs(crop_dir, exist_ok=True)
@@ -118,6 +131,9 @@ def save_crops(run: str, coin: Item) -> Tuple[str, str, np.ndarray]:
         rel = f"crops/{coin['coin_id']}_{side}.jpg"
         path = os.path.join(run, rel)
         if os.path.exists(path):
+            if not need_thumb:
+                paths.append(rel)
+                continue
             img = cv2.imread(path)
         else:
             img = crop_side(coin, side, max_size=768)
@@ -126,7 +142,8 @@ def save_crops(run: str, coin: Item) -> Tuple[str, str, np.ndarray]:
         thumbs.append(
             cv2.resize(img, (THUMB_PX, THUMB_PX), interpolation=cv2.INTER_AREA)
         )
-    return paths[0], paths[1], np.hstack(thumbs)
+    thumb = np.hstack(thumbs) if need_thumb and len(thumbs) == 2 else None
+    return paths[0], paths[1], thumb
 
 
 def metal(composition: Optional[str]) -> Optional[str]:
@@ -189,7 +206,7 @@ def build_rows(run: str, with_thumbs: bool) -> List[Item]:
         cid = coin["coin_id"]
         ident = idents[cid]
         match = matches.get(cid, {})
-        front, back, thumb = save_crops(run, coin)
+        front, back, thumb = save_crops(run, coin, need_thumb=with_thumbs)
         # An ambiguous match may be the wrong type (10 Pfennig vs gold 10 Mark):
         # show its prices, but value the coin only from a trusted match.
         trusted = trusted_match(ident, match)
@@ -360,12 +377,14 @@ def value_formulas(letter: Dict[str, str], r: int) -> Dict[str, str]:
     melt, num = f"{letter['melt_eur']}{r}", f"{letter['price_at_grade']}{r}"
     llm, ovr = f"{letter['llm_guess']}{r}", f"{letter['override_eur']}{r}"
     grade = f"{letter['price_grade']}{r}"
+    s_ovr, s_llm, s_melt = (source_label(s) for s in ("override", "llm_guess", "melt"))
+    s_num = "Numista " if i18n.is_de() else "numista_"
     return {
-        "melt_eur": f'=IF(AND({ag}="",{au}=""),"",N({ag})*{SILVER_CELL}+N({au})*{GOLD_CELL})',
+        "melt_eur": f'=IF(AND({ag}="",{au}=""),"",N({ag})*{silver_cell()}+N({au})*{gold_cell()})',
         "est_value_eur": f'=IF({ovr}<>"",{ovr},IF(AND({melt}="",{num}=""),'
         f'IF({llm}="","",{llm}),MAX(N({melt}),N({num}))))',
-        "value_source": f'=IF({ovr}<>"","override",IF(AND({melt}="",{num}=""),'
-        f'IF({llm}="","","llm_guess"),IF(N({melt})>N({num}),"melt","numista_"&{grade})))',
+        "value_source": f'=IF({ovr}<>"","{s_ovr}",IF(AND({melt}="",{num}=""),'
+        f'IF({llm}="","","{s_llm}"),IF(N({melt})>N({num}),"{s_melt}","{s_num}"&{grade})))',
     }
 
 
@@ -381,7 +400,7 @@ def write_coin_sheet(ws, rows: List[Item], with_thumbs: bool) -> None:
     columns = sheet_columns(with_thumbs)
     letter = {key: get_column_letter(i) for i, (key, *_) in enumerate(columns, start=1)}
     for col, (_, header, width, _) in enumerate(columns, start=1):
-        cell = ws.cell(row=1, column=col, value=header)
+        cell = ws.cell(row=1, column=col, value=tr(header))
         cell.font = Font(bold=True)
         cell.fill = HEADER_FILL
         cell.alignment = Alignment(wrap_text=True, vertical="center")
@@ -393,7 +412,7 @@ def write_coin_sheet(ws, rows: List[Item], with_thumbs: bool) -> None:
             ws.row_dimensions[r_idx].height = THUMB_PX * 0.75 + 4
         formulas = {} if SHARE else value_formulas(letter, r_idx)
         for col, (key, _, _, kind) in enumerate(columns, start=1):
-            value = formulas.get(key, row.get(key))
+            value = formulas.get(key, localize(key, row.get(key)))
             if kind == "thumb":
                 if value is not None:
                     ok, buf = cv2.imencode(
@@ -404,7 +423,7 @@ def write_coin_sheet(ws, rows: List[Item], with_thumbs: bool) -> None:
                 continue
             cell = ws.cell(row=r_idx, column=col)
             if kind in ("link", "file") and value:
-                cell.value = "open" if kind == "link" else os.path.basename(value)
+                cell.value = tr("open") if kind == "link" else os.path.basename(value)
                 cell.hyperlink = value
                 cell.font = LINK_FONT
             else:
@@ -438,7 +457,7 @@ def type_rows(rows: List[Item], coin_row: Dict[str, int], est_col: str) -> List[
     for members in groups.values():
         first = members[0]
         each = first["est_value_eur"]
-        ref = f"Coins!${est_col}${coin_row[first['coin_id']]}"
+        ref = f"{sheet_ref('Coins')}!${est_col}${coin_row[first['coin_id']]}"
         out.append(
             {
                 "numista_title": first["numista_title"],
@@ -468,16 +487,16 @@ def write_simple_sheet(
     ws, rows: List[Item], columns: List[Tuple[str, str, int, Optional[str]]]
 ) -> None:
     for col, (_, header, width, _) in enumerate(columns, start=1):
-        cell = ws.cell(row=1, column=col, value=header)
+        cell = ws.cell(row=1, column=col, value=tr(header))
         cell.font = Font(bold=True)
         cell.fill = HEADER_FILL
         ws.column_dimensions[get_column_letter(col)].width = width
     for r_idx, row in enumerate(rows, start=2):
         for col, (key, _, _, kind) in enumerate(columns, start=1):
             cell = ws.cell(row=r_idx, column=col)
-            value = row.get(key)
+            value = localize(key, row.get(key))
             if kind == "link" and value:
-                cell.value, cell.hyperlink, cell.font = "open", value, LINK_FONT
+                cell.value, cell.hyperlink, cell.font = tr("open"), value, LINK_FONT
             else:
                 cell.value = value
             if kind == "eur":
@@ -492,16 +511,18 @@ def write_summary(
     n = len(rows) + 1
 
     def col(key: str) -> str:
-        return f"Coins!{letter[key]}2:{letter[key]}{n}"
+        return f"{sheet_ref('Coins')}!{letter[key]}2:{letter[key]}{n}"
 
     identified = [r for r in rows if r["confidence"] is not None]
     matched = [r for r in rows if r["match_status"] == "matched"]
-    grade = os.environ.get("ASSUMED_GRADE", "xf")
+    grade = os.environ.get("ASSUMED_GRADE", "xf").strip().lower() or "xf"
 
     def total(key: str, only: Optional[str] = None) -> Any:
         if not SHARE:
             if only:
-                return f'=SUMIF({col("value_source")},"{only}",{col(key)})'
+                return (
+                    f'=SUMIF({col("value_source")},"{source_label(only)}",{col(key)})'
+                )
             return f"=SUM({col(key)})"
         return round(
             sum(r[key] or 0 for r in rows if only is None or r["value_source"] == only),
@@ -511,13 +532,13 @@ def write_summary(
     lines = [
         (
             "Valuation inputs",
-            "fixed values at these prices" if SHARE else "edit B3/B4: melt and values recalculate",
+            tr("fixed values at these prices" if SHARE else "edit B3/B4: melt and values recalculate"),
             True,
         ),
         ("Prices taken from .env on", datetime.now().strftime("%Y-%m-%d %H:%M"), False),
         ("Silver € per g (pure)", env_float("SILVER_EUR_PER_G") or 0, False),
         ("Gold € per g (pure)", env_float("GOLD_EUR_PER_G") or 0, False),
-        ("Assumed grade (Numista price)", f"{grade}  (change in .env + re-run)", False),
+        ("Assumed grade (Numista price)", grade_text(grade), False),
         ("Numista prices fetched", numista_fetch_month(), False),
         ("", "", False),
         ("Collection", "", True),
@@ -533,10 +554,17 @@ def write_summary(
         ("Total silver g", total("silver_g"), False),
         ("Total gold g", total("gold_g"), False),
     ]  # fmt: skip
-    ws.column_dimensions["A"].width = 36
-    ws.column_dimensions["B"].width = 40
+    if i18n.is_de():
+        lines += [
+            ("", "", False),
+            ("How to read this", "", True),
+            (tr("grade_legend"), "", False),
+            (tr("source_legend"), "", False),
+        ]
+    ws.column_dimensions["A"].width = 40
+    ws.column_dimensions["B"].width = 44
     for i, (label, value, heading) in enumerate(lines, start=1):
-        ws.cell(row=i, column=1, value=label).font = Font(
+        ws.cell(row=i, column=1, value=tr(label)).font = Font(
             bold=True, size=12 if heading else 11
         )
         cell = ws.cell(row=i, column=2, value=value)
@@ -544,6 +572,13 @@ def write_summary(
             cell.number_format = '#,##0.00 "€"'
     for ref in ("B3", "B4"):
         ws[ref].fill = PatternFill("solid", fgColor="FFF2CC")
+
+
+def grade_text(grade: str) -> str:
+    shown = i18n.grade_label(grade) or grade
+    if shown != grade:
+        shown = f"{shown} ({grade.upper()})"
+    return f"{shown}  {tr('(change in .env + re-run)')}"
 
 
 def numista_fetch_month() -> str:
@@ -668,8 +703,15 @@ def main() -> int:
         action="store_true",
         help="write coins_share.xlsx to send to others (see above)",
     )
+    parser.add_argument(
+        "--lang",
+        choices=["EN", "DE", "en", "de"],
+        help="workbook language (default: SUMMARY_LANGUAGE in .env, else EN)",
+    )
     args = parser.parse_args()  # fmt: skip
     with_thumbs = not args.no_thumbs
+    if args.lang:
+        i18n.set_language(args.lang)
     global SHARE, THUMB_PX
     if args.share:
         SHARE, THUMB_PX = True, 110
@@ -691,11 +733,11 @@ def main() -> int:
 
     wb = Workbook()
     write_summary(wb.active, rows, types, letter)
-    wb.active.title = "Summary"
-    write_coin_sheet(wb.create_sheet("Highlights"), highlights, with_thumbs)
-    write_coin_sheet(wb.create_sheet("Coins"), rows, with_thumbs)
+    wb.active.title = tr("Summary")
+    write_coin_sheet(wb.create_sheet(tr("Highlights")), highlights, with_thumbs)
+    write_coin_sheet(wb.create_sheet(tr("Coins")), rows, with_thumbs)
     write_simple_sheet(
-        wb.create_sheet("Types"),
+        wb.create_sheet(tr("Types")),
         types,
         [
             ("numista_title", "Numista type", 34, None),
@@ -716,10 +758,10 @@ def main() -> int:
         (r for r in rows if r["est_value_eur"] is not None),
         key=lambda r: -r["est_value_eur"],
     )[: args.top]
-    write_coin_sheet(wb.create_sheet("Top"), top, with_thumbs)
+    write_coin_sheet(wb.create_sheet(tr("Top")), top, with_thumbs)
     if not SHARE:  # the review queue is a to-do list for us, not for recipients
         write_coin_sheet(
-            wb.create_sheet("Review"),
+            wb.create_sheet(tr("Review")),
             [r for r in rows if r["needs_review"]],
             with_thumbs,
         )
@@ -733,7 +775,7 @@ def main() -> int:
     write_highlights_md(args.run, rows, top_n=40)
     n_review = sum(1 for r in rows if r["needs_review"])
     print(
-        f"Wrote {out}: {len(rows)} coins, {len(types)} types, {len(highlights)} highlights, "
+        f"Wrote {out} ({i18n.LANG}): {len(rows)} coins, {len(types)} types, {len(highlights)} highlights, "
         f"{n_review} to review. Also highlights.md and valuation.json."
     )
     return 0
