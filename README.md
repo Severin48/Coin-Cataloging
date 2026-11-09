@@ -127,24 +127,45 @@ uv run numista.py --status     #    quota used this month
 uv run build_table.py          # 5) → results/<run>/coins.xlsx (offline, re-run any time)
 uv run review_outliers.py      #    → outlier_review.xlsx: doubtful high-value matches to check by hand
 uv run analyze.py              #    → analysis/report.md + plots: value distribution, drivers, melt vs Numista
+uv run selling.py              #    → selling/: what to sell individually vs. by weight / in lots
+uv run open_coins.py           #    → open_coins.xlsx: open coins + a column for your own observations
 ~~~
 
 ### Results and re-valuing
 
 `build_table.py` writes into the run folder:
 
-- `coins.xlsx` has the sheets **Summary**, **Highlights** (confidently valuable coins), **Coins**, **Types**, **Top** and **Review**.
+- `coins.xlsx` has the sheets **Summary**, **Highlights** (confidently valuable coins), **Coins**, **Types**, **Top**, **Open** and **Review**.
+- **Open** lists every coin whose value is still only an LLM guess, with the reason and the next step: *wait for Numista quota* (resolves itself on the next `numista.py` run) or *identify manually* (no or uncertain Numista match: set `numista_type_id` or `est_value_eur` in `overrides.csv`). Manual ones come first, most valuable first. The Coins sheet has the same two columns to filter on, the Summary shows both counts and `highlights.md` lists the manual ones.
 - `highlights.md` is the same highlights list as Markdown, with Numista, eBay-sold and image links.
 - `valuation.json` records the silver/gold €/g and grade that the values are based on, and when they were taken.
 - `crops/` holds a front and back JPG for every coin. The sheets link to them.
 
 Melt value, estimated value and the totals are **Excel formulas** on the yellow cells `Summary!B3` (silver €/g) and `B4` (gold €/g). Change them in Excel and everything recalculates. Alternatively, update `SILVER_EUR_PER_G` / `GOLD_EUR_PER_G` in `.env` and re-run `uv run build_table.py`, which also refreshes the sorting, the highlights and `valuation.json`. Numista prices are cached; the month they were fetched is shown in the Summary sheet.
 
-To send the table to someone else, run `uv run build_table.py --share`. This writes `coins_share.xlsx` with fixed values instead of formulas, because email and phone previews don't calculate formulas. It also has no links to files on this PC, bigger pictures, all highlights and no Review sheet (about 13 MB).
+To send the table to someone else, run `uv run build_table.py --share`. This writes `coins_share.xlsx` with fixed values instead of formulas, because email and phone previews don't calculate formulas. It also has no links to files on this PC, bigger pictures, all highlights and the Open sheet, but no Review sheet (about 13 MB).
 
 With `SUMMARY_LANGUAGE=DE` (or `--lang DE`) both workbooks are in German: sheet names, headers, labels, country names, LLM grades and the German grade abbreviations (s/ss/vz/st for F/VF/XF/UNC). Subjects and Numista titles stay as catalogued.
 
 `analyze.py` writes `results/<run>/analysis/`: `report.md` with the key numbers and all plots (value distribution and concentration, value by country, era, metal, type and condition, melt vs Numista premium, what the assumed grade does to the total, LLM guess accuracy, mintage vs price), `coins_analysis.csv` (one flat row per coin) and `correlations.csv`.
+
+`selling.py` writes the **selling plan** to `results/<run>/selling/`. It decides which coins are worth selling individually and which should go to a precious-metal dealer by weight (silver, gold), into themed lots or into bulk:
+
+- `selling_guide.md`: the plan with expected proceeds and number of sales per route, the steps, silver per fineness, the lots, and the singles with pictures and what to check before selling.
+- `selling_plan.xlsx` (language from `SUMMARY_LANGUAGE`): sheets *Overview*, *Singles*, *Precious metal* and *Lots*. Each has a picture, the coin ID, where to find the coin (page = scan name, row from the top, position from the left), the value, the melt value and the expected proceeds. The *Singles* sheet also shows the page with the coin marked. Coins on none of the sheets go to bulk.
+- `selling_plan.csv`: the route of every coin.
+
+The thresholds and realization rates are `SELL_*` settings in `.env`. Their defaults and meanings are in `selling.SETTINGS` and at the end of the guide. For example, `SELL_MAX_SINGLES=50` caps the number of singles, and `SELL_SINGLE_MIN_GAIN_EUR=10` is how much more a single listing must earn than the bulk route.
+
+### Identifying open coins by hand
+
+Some coins neither the LLM nor Numista can pin down. `uv run open_coins.py` writes `results/<run>/open_coins.xlsx` with only those coins (`--all` adds the ones that just wait for Numista quota), most valuable first: picture of both sides, where the coin lies (page, row, position), the LLM's identification and value, the Numista suggestion, links to both crops and a yellow column **My observations**.
+
+1. Look at the coin and write what you see into that column: legend, date, mint mark, metal, weight, diameter, edge, or a Numista link / `N# 12345` (that becomes a `numista_type_id` override). Save and close the file.
+2. `uv run open_coins.py --list` (free) shows which coins would be sent and the cost; `--submit` sends **only the coins with a new or changed note** to Claude (Batch API, both pictures plus your note and the earlier identification in one request); `--collect --wait` appends the answers to `identifications.jsonl`.
+3. `uv run numista.py`, `uv run build_table.py`, `uv run open_coins.py`: the *Status* column then shows the new result.
+
+Notes are also saved to `coin_notes.csv` (repo root, tracked) on every run, so rebuilding the sheet keeps them.
 
 The default run is set in `coins_common.py` (`DEFAULT_RUN`). Use **one** results run for all stages, because coin numbering changes whenever extraction changes. Coins are referred to by `coin_id = <pair_key>_coin<coin_number>` (e.g. `b2_s1_coin3`).
 

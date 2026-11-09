@@ -18,6 +18,7 @@ to run each stage and the conventions that stop the stages from drifting apart.
 | 4 | Catalogue and prices | `numista.py` | `identifications.jsonl` | `numista_matches.jsonl`, `numista_cache/`, `numista_usage.json` | free quota, 2,000 req/month |
 | 5 | Table | `build_table.py` | all of the above + `overrides.csv` + metal prices in `.env` | `coins.xlsx`, `highlights.md`, `valuation.json`, `crops/` | free |
 | 6 | Analysis | `analyze.py` | same inputs, via `build_table.build_rows` | `analysis/` (`report.md`, PNG plots, `coins_analysis.csv`, `correlations.csv`) | free |
+| 7 | Selling plan | `selling.py` | `analyze.load` + `outlier_notes.csv`, `SELL_*` in `.env` | `selling/` (`selling_guide.md`, `selling_plan.xlsx`, `selling_plan.csv`, `tradeoff.png`, `locate/`) | free |
 
 Workbook language: `SUMMARY_LANGUAGE=EN|DE` in `.env` (or `--lang`), handled by `i18n.py`. Only
 written cell text is translated (`tr()`, `localize()`); keep internal keys (`value_source`,
@@ -62,6 +63,22 @@ override), and the value comes from a Numista price or melt, not from the LLM gu
 (`is_highlight()` in `build_table.py`). The second list in that file, "possibly valuable, not
 confirmed", is the review queue for `identify-coins`. Always state the metal prices and the
 grade the values assume (`valuation.json`).
+
+## Open coins (value still an LLM guess)
+
+`build_table.open_status()` gives every coin without a Numista price, melt value or override a
+reason and a next step. *wait for Numista quota* clears on the next `numista.py` run. *identify
+manually* (not identified, not found on Numista, uncertain match, no price) never clears by itself:
+work through it with `identify-coins` and record `numista_type_id` or `est_value_eur` in
+`overrides.csv`. These coins are on the sheet **Open**, in the last section of `highlights.md` and
+counted on the Summary sheet.
+
+For the owner's own checks, `open_coins.py` writes `<run>/open_coins.xlsx` (only the manual ones,
+`--all` adds the waiting ones) with a column *My observations*. Notes are synced to `coin_notes.csv`
+(repo root, tracked) on every run; a Numista link or `N# 12345` in a note becomes a
+`numista_type_id` override. `--list` (free) / `--submit` / `--collect --wait` re-identify **only
+coins whose note is new or changed** (Batch API, paid: show `--list` cost first), appending to
+`identifications.jsonl` with `user_notes`. Afterwards run `numista.py`, `build_table.py`, `open_coins.py`.
 
 ## Outliers (suspected rare types, doubtful prices)
 

@@ -2,3 +2,10 @@ coin_id,field,value,source,note
 k2_h2_s2_coin11,denomination_value,50,claude-code,"legend reads ELLİ LİRA (fifty), LLM read 25"
 k2_h2_s2_coin11,denomination_title,50 Lira,claude-code,
 k2_h2_s2_coin11,numista_type_id,36927,https://en.numista.com/catalogue/pieces36927.html,50 Lira (Battle of Malazgirt)
+k1_h3_s3_coin41,numista_type_id,14906,https://en.numista.com/catalogue/pieces14906.html,"Madonnentaler 1774 A (Amberg mint, Dav. 1954); legends per owner's notes, not Munich"
+k1_h3_s3_coin41,mint_mark,A,claude-code,A below bust = Amberg
+k1_h4_s2_coin16,numista_type_id,46275,https://en.numista.com/catalogue/pieces46275.html,"value-in-centre reverse I THALER 1835 (1834-35, AKS 63); not N# 31265 (crowned arms reverse)"
+k1_h4_s2_coin17,numista_type_id,47114,https://en.numista.com/47114,"death of King Georg, KM 1261; owner read 15.X.1904 beside portrait"
+k1_h3_s3_coin40,numista_type_id,7393,https://en.numista.com/7393,"posthumous restrike, frozen date 1780 X, S.F.; proof-like modern strike"
+k1_h3_s3_coin41,est_value_eur,110,https://en.numista.com/catalogue/pieces14906.html,"Numista ss price for 1774 A (legend divided U-B = Dav. 1954A); reverse scratched, could fetch less; melt 35 EUR"
+k1_h4_s2_coin16,est_value_eur,80,https://www.ma-shops.de/hoehn/item.php?id=4912,"Numista lists no prices (melt 25 EUR); dealers ss ~90 EUR (Hoehn, sold), s-ss 42 EUR, vz auctions start 170-220 EUR"

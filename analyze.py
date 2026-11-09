@@ -4,7 +4,7 @@
 
 Uses the same per-coin values as build_table.py (build_rows) and writes everything to
 <run>/analysis/: report.md (key numbers + all plots), PNG plots, coins_analysis.csv
-(one flat row per coin) and correlations.csv.
+(one flat row per coin) and correlations.csv. The selling plan is separate: selling.py.
 
 "Reliable" values come from a trusted Numista price, melt value or a manual override.
 LLM guesses are shown separately: they cover the coins Numista hasn't priced yet and are
@@ -142,6 +142,11 @@ def load(run: str) -> List[Item]:
                 "year": year,
                 "era": era_of(year),
                 "denomination": r["denomination"],
+                "title": r["numista_title"] or r["subject"],
+                "composition": r["composition"],
+                "needs_review": r["needs_review"],
+                "numista_url": r["numista_url"],
+                "ebay_sold": r["ebay_sold"],
                 "coin_type": r["coin_type"] or "unknown",
                 "metal": B.metal(r["composition"]) or "unknown",
                 "grade_guess": r["grade_guess"],

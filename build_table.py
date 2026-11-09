@@ -4,8 +4,12 @@
 
 Reads extraction_results(_with_groups).json, identifications.jsonl, numista_matches.jsonl
 and overrides.csv. Writes per-coin crops to <run>/crops/ (linked from the sheet),
-coins.xlsx (sheets Summary, Highlights, Coins, Types, Top, Review), highlights.md and
+coins.xlsx (sheets Summary, Highlights, Coins, Types, Top, Open, Review), highlights.md and
 valuation.json (the metal prices and grade the values are based on).
+
+Open = coins whose value is still only an LLM guess, with the reason and next step:
+"wait for Numista quota" resolves itself on the next numista.py run, "identify manually"
+needs an overrides.csv entry (numista_type_id or est_value_eur), e.g. via identify-coins.
 
 Value = max(Numista price at ASSUMED_GRADE, melt value); melt needs SILVER_EUR_PER_G /
 GOLD_EUR_PER_G in .env. Without a Numista price the LLM guess is used and marked as such.
@@ -318,6 +322,41 @@ def flag_reviews(rows: List[Item]) -> None:
         if "numista_type_id" in (ident.get("overridden") or []):
             reasons = [x for x in reasons if "Numista" not in x]
         r["needs_review"] = "; ".join(reasons) or None
+        r["open_reason"], r["open_action"] = open_status(r)
+
+
+# Coins without a checked value (Numista price, melt or override). "wait" resolves
+# itself once numista.py has requests again; "identify manually" never does.
+WAIT, MANUAL = "wait for Numista quota", "identify manually"
+
+
+def open_status(r: Item) -> Tuple[Optional[str], Optional[str]]:
+    ident, status = r["_ident"], r["match_status"]
+    if r["value_source"] not in (None, "llm_guess"):
+        return None, None
+    if ident.get("is_coin") is False or ident.get("exclude"):
+        return None, None
+    if "confidence" not in ident:
+        return "not identified by LLM", MANUAL
+    if status in (None, "pending_quota", "api_error", "skipped_low_value"):
+        return "not looked up on Numista yet", WAIT
+    if "numista_type_id" in (ident.get("overridden") or []) and not trusted_match(
+        ident, r["_match"]
+    ):
+        return "manual Numista type not fetched yet", WAIT
+    if status in ("no_candidates", "type_not_found"):
+        return "not found on Numista", MANUAL
+    if not trusted_match(ident, r["_match"]):
+        return "Numista match uncertain", MANUAL
+    return "Numista has no price", MANUAL
+
+
+def open_rows(rows: List[Item]) -> List[Item]:
+    """Open coins, manual ones first, each block by LLM guess (most valuable first)."""
+    return sorted(
+        (r for r in rows if r["open_reason"]),
+        key=lambda r: (r["open_action"] != MANUAL, -(r["llm_guess"] or 0)),
+    )
 
 
 # ----------------------------------------------------------------------- writing
@@ -332,6 +371,8 @@ COLUMNS = [
     ("subject", "Subject", 28, None),
     ("est_value_eur", "Est. value €", 11, "eur"),
     ("value_source", "Value source", 12, None),
+    ("open_reason", "Open: why", 20, None),
+    ("open_action", "Next step", 14, None),
     ("melt_eur", "Melt €", 9, "eur"),
     ("price_at_grade", "Numista € @grade", 10, "eur"),
     ("price_grade", "Grade", 6, None),
@@ -431,7 +472,8 @@ def write_coin_sheet(ws, rows: List[Item], with_thumbs: bool) -> None:
             if kind == "eur":
                 cell.number_format = '#,##0.00 "€"'
             cell.alignment = Alignment(
-                vertical="center", wrap_text=key in ("subject", "needs_review", "notes")
+                vertical="center",
+                wrap_text=key in ("subject", "needs_review", "notes", "open_reason"),
             )
     ws.freeze_panes = "C2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(columns))}{len(rows) + 1}"
@@ -547,6 +589,8 @@ def write_summary(
         ("Matched to Numista", len(matched), False),
         ("Distinct types", len(types), False),
         ("Need review", sum(1 for r in rows if r["needs_review"]), False),
+        ("Open: wait for Numista quota", sum(1 for r in rows if r["open_action"] == WAIT), False),
+        ("Open: identify manually", sum(1 for r in rows if r["open_action"] == MANUAL), False),
         ("Highlights (confidently valuable)", sum(1 for r in rows if is_highlight(r)), False),
         ("Total estimated value €", total("est_value_eur"), False),
         ("  of which from LLM guesses €", total("est_value_eur", "llm_guess"), False),
@@ -687,6 +731,25 @@ def write_highlights_md(run: str, rows: List[Item], top_n: int) -> None:
             f"| `{r['coin_id']}` {describe(r)} | {fmt(r['est_value_eur'])} | "
             f"{r['value_source']} | {r['needs_review'] or 'below confidence/match threshold'} |"
         )
+    open_all = open_rows(rows)
+    manual = [r for r in open_all if r["open_action"] == MANUAL]
+    n_wait = len(open_all) - len(manual)
+    lines += [
+        "",
+        f"## Open: identify manually ({len(manual)})",
+        "",
+        "Value is still only an LLM guess and Numista won't resolve it by itself. Set "
+        "`numista_type_id` or `est_value_eur` in `overrides.csv` (`/identify-coins`). "
+        f"Another {n_wait} coins only wait for Numista quota (sheet *Open* has all of them).",
+        "",
+        "| Coin | LLM guess | Why open | Crops |",
+        "|---|---|---|---|",
+    ]
+    for r in manual:
+        lines.append(
+            f"| `{r['coin_id']}` {describe(r)} | {fmt(r['llm_guess'])} | "
+            f"{r['open_reason']} | [front]({r['front_crop']}) · [back]({r['back_crop']}) |"
+        )
     with open(os.path.join(run, "highlights.md"), "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -759,6 +822,8 @@ def main() -> int:
         key=lambda r: -r["est_value_eur"],
     )[: args.top]
     write_coin_sheet(wb.create_sheet(tr("Top")), top, with_thumbs)
+    # open coins stay visible in the shared workbook too: their values are unchecked
+    write_coin_sheet(wb.create_sheet(tr("Open")), open_rows(rows), with_thumbs)
     if not SHARE:  # the review queue is a to-do list for us, not for recipients
         write_coin_sheet(
             wb.create_sheet(tr("Review")),
@@ -774,9 +839,12 @@ def main() -> int:
     write_valuation_json(args.run, rows)
     write_highlights_md(args.run, rows, top_n=40)
     n_review = sum(1 for r in rows if r["needs_review"])
+    n_wait = sum(1 for r in rows if r["open_action"] == WAIT)
+    n_manual = sum(1 for r in rows if r["open_action"] == MANUAL)
     print(
         f"Wrote {out} ({i18n.LANG}): {len(rows)} coins, {len(types)} types, {len(highlights)} highlights, "
-        f"{n_review} to review. Also highlights.md and valuation.json."
+        f"{n_review} to review, open: {n_wait} wait for Numista, {n_manual} identify manually. "
+        "Also highlights.md and valuation.json."
     )
     return 0
 
